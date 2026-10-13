@@ -8,6 +8,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <time.h>
+#include <sys/ioctl.h>
 
 extern int errno;
 
@@ -43,7 +44,7 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-// The original basic ls function
+// The updated default ls function with "down then across" column formatting
 void do_ls(const char *dir) {
     struct dirent *entry;
     DIR *dp = opendir(dir);
@@ -51,15 +52,74 @@ void do_ls(const char *dir) {
         fprintf(stderr, "Cannot open directory : %s\n", dir);
         return;
     }
+
+    // Initialize dynamic array for filenames
+    int capacity = 128;
+    int count = 0;
+    char **files = malloc(capacity * sizeof(char *));
+    int max_len = 0;
+
     errno = 0;
+    // Read all directory entries into the dynamically allocated array
     while ((entry = readdir(dp)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
-        printf("%s\n", entry->d_name);
+        if (entry->d_name[0] == '.') continue; // skip hidden files
+
+        int len = strlen(entry->d_name);
+        if (len > max_len) max_len = len;
+
+        // Reallocate memory if we hit the capacity limit
+        if (count >= capacity) {
+            capacity *= 2;
+            files = realloc(files, capacity * sizeof(char *));
+        }
+
+        // Duplicate the string into our array
+        files[count] = strdup(entry->d_name);
+        count++;
     }
+
     if (errno != 0) perror("readdir failed");
     closedir(dp);
-}
 
+    if (count == 0) {
+        free(files);
+        return;
+    }
+
+    // Get the terminal width using ioctl
+    struct winsize w;
+    int term_width = 80; // Fallback width
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) != -1) {
+        term_width = w.ws_col;
+    }
+
+    // Calculate grid layout
+    int col_width = max_len + 2; // Add a 2-space buffer between columns
+    int num_cols = term_width / col_width;
+    if (num_cols == 0) num_cols = 1; // Prevent division by zero if terminal is tiny
+
+    // Calculate total rows needed (integer division ceiling trick)
+    int num_rows = (count + num_cols - 1) / num_cols;
+
+    // Print items "down then across"
+    for (int r = 0; r < num_rows; r++) {
+        for (int c = 0; c < num_cols; c++) {
+            // Calculate the 1D array index based on the 2D grid position
+            int index = r + (c * num_rows);
+            if (index < count) {
+                // %-*s dynamically pads the string with spaces based on col_width
+                printf("%-*s", col_width, files[index]);
+            }
+        }
+        printf("\n");
+    }
+
+    // Free the dynamically allocated memory
+    for (int i = 0; i < count; i++) {
+        free(files[i]);
+    }
+    free(files);
+}
 // The new long listing function
 void do_ls_long(const char *dir) {
     struct dirent *entry;
