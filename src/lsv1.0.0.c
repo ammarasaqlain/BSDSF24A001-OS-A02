@@ -10,7 +10,6 @@
 #include <time.h>
 #include <sys/ioctl.h>
 
-// ANSI Color Codes
 #define COLOR_RESET   "\033[0m"
 #define COLOR_BLUE    "\033[0;34m"
 #define COLOR_GREEN   "\033[0;32m"
@@ -20,7 +19,7 @@
 
 extern int errno;
 
-void process_dir(const char *dir, int l_flag, int x_flag);
+void process_dir(const char *dir, int l_flag, int x_flag, int R_flag);
 void print_vertical(const char *dir, char **files, int count, int max_len);
 void print_horizontal(const char *dir, char **files, int count, int max_len);
 void print_long(const char *dir, char **files, int count);
@@ -32,31 +31,39 @@ int compare_filenames(const void *a, const void *b) {
 }
 
 int main(int argc, char *argv[]) {
-    int l_flag = 0, x_flag = 0, opt;
-    while ((opt = getopt(argc, argv, "lx")) != -1) {
+    int l_flag = 0, x_flag = 0, R_flag = 0, opt;
+    
+    // Add 'R' to the getopt string
+    while ((opt = getopt(argc, argv, "lxR")) != -1) {
         if (opt == 'l') l_flag = 1;
         else if (opt == 'x') x_flag = 1;
+        else if (opt == 'R') R_flag = 1;
     }
+    
     if (optind == argc) {
-        process_dir(".", l_flag, x_flag);
+        process_dir(".", l_flag, x_flag, R_flag);
     } else {
         for (int i = optind; i < argc; i++) {
-            printf("Directory listing of %s :\n", argv[i]);
-            process_dir(argv[i], l_flag, x_flag);
-            puts("");
+            if (argc - optind > 1 || R_flag) printf("%s:\n", argv[i]);
+            process_dir(argv[i], l_flag, x_flag, R_flag);
+            if (i < argc - 1) puts("");
         }
     }
     return 0;
 }
 
-void process_dir(const char *dir, int l_flag, int x_flag) {
+void process_dir(const char *dir, int l_flag, int x_flag, int R_flag) {
     struct dirent *entry;
     DIR *dp = opendir(dir);
-    if (dp == NULL) return;
+    if (dp == NULL) {
+        // Only print error if we can't open a top-level dir, suppress for unreadable subdirs
+        return; 
+    }
 
     int capacity = 128, count = 0, max_len = 0;
     char **files = malloc(capacity * sizeof(char *));
     errno = 0;
+    
     while ((entry = readdir(dp)) != NULL) {
         if (entry->d_name[0] == '.') continue;
         int len = strlen(entry->d_name);
@@ -68,6 +75,7 @@ void process_dir(const char *dir, int l_flag, int x_flag) {
         files[count++] = strdup(entry->d_name);
     }
     closedir(dp);
+    
     if (count == 0) {
         free(files);
         return;
@@ -79,11 +87,27 @@ void process_dir(const char *dir, int l_flag, int x_flag) {
     else if (x_flag) print_horizontal(dir, files, count, max_len);
     else print_vertical(dir, files, count, max_len);
 
+    // Feature 7: The Recursive Step
+    if (R_flag) {
+        for (int i = 0; i < count; i++) {
+            // Construct the full absolute path
+            char full_path[1024];
+            snprintf(full_path, sizeof(full_path), "%s/%s", dir, files[i]);
+            
+            struct stat st;
+            // Check if the current file is actually a directory
+            if (lstat(full_path, &st) != -1 && S_ISDIR(st.st_mode)) {
+                printf("\n%s:\n", full_path);
+                // The recursion: function calls itself with the new path
+                process_dir(full_path, l_flag, x_flag, R_flag);
+            }
+        }
+    }
+
     for (int i = 0; i < count; i++) free(files[i]);
     free(files);
 }
 
-// Determines file type and prints with the correct ANSI color
 void print_colored(const char *dir, const char *name, int col_width, int pad) {
     char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s/%s", dir, name);
@@ -99,7 +123,6 @@ void print_colored(const char *dir, const char *name, int col_width, int pad) {
     }
 
     if (pad) {
-        // Print color, name, reset, then manually pad spaces so ANSI codes don't break column width math
         printf("%s%s%s", color, name, COLOR_RESET);
         for (int i = strlen(name); i < col_width; i++) putchar(' ');
     } else {
@@ -186,7 +209,6 @@ void print_long_format(const char *dir, const char *name) {
            pwd ? pwd->pw_name : "UNKNOWN", grp ? grp->gr_name : "UNKNOWN", 
            (long)file_stat.st_size, time_str + 4);
     
-    // Call the color print function without column padding for the long format
     print_colored(dir, name, 0, 0);
     printf("\n");
 }
